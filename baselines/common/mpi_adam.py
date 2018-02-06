@@ -21,7 +21,7 @@ class MpiAdam(object):
     def update(self, localg, stepsize):
         if self.t % 100 == 0:
             self.check_synced()
-        localg = localg.astype('float32')
+        localg = localg.astype('float64')
         globalg = np.zeros_like(localg)
         self.comm.Allreduce(localg, globalg, op=MPI.SUM)
         if self.scale_grad_by_procs:
@@ -31,7 +31,11 @@ class MpiAdam(object):
         a = stepsize * np.sqrt(1 - self.beta2**self.t)/(1 - self.beta1**self.t)
         self.m = self.beta1 * self.m + (1 - self.beta1) * globalg
         self.v = self.beta2 * self.v + (1 - self.beta2) * (globalg * globalg)
+        if np.isnan(globalg.any()):
+            raise ValueError('nan in globalg.')
         step = (- a) * self.m / (np.sqrt(self.v) + self.epsilon)
+        if np.isnan(step.any()):
+            raise ValueError('nan in step.')
         self.setfromflat(self.getflat() + step)
 
     def sync(self):

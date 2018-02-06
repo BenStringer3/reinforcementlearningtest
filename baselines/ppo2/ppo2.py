@@ -103,6 +103,7 @@ class Runner(object):
         epinfos = []
         for _ in range(self.nsteps):
             actions, values, self.states, neglogpacs = self.model.step(self.obs, self.states, self.dones)
+            self.env.render() # ben
             mb_obs.append(self.obs.copy())
             mb_actions.append(actions)
             mb_values.append(values)

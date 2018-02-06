@@ -319,7 +319,7 @@ def dropout(x, pkeep, phase=None, mask=None):
 # Theano-like Function
 # ================================================================
 
-def function(inputs, outputs, updates=None, givens=None):
+def function(inputs, outputs, updates=None, givens=None, tensorboard_stuff=None, check=tf.add_check_numerics_ops()):
     """Just like Theano function. Take a bunch of tensorflow placeholders and expressions
     computed based on those placeholders and produces f(inputs) -> outputs. Function f takes
     values to be fed to the input's placeholders and produces the values of the expressions
@@ -351,16 +351,16 @@ def function(inputs, outputs, updates=None, givens=None):
         value will also have the same shape.
     """
     if isinstance(outputs, list):
-        return _Function(inputs, outputs, updates, givens=givens)
+        return _Function(inputs, outputs, updates, givens=givens, tensorboard_stuff=tensorboard_stuff, check=check)
     elif isinstance(outputs, (dict, collections.OrderedDict)):
-        f = _Function(inputs, outputs.values(), updates, givens=givens)
+        f = _Function(inputs, outputs.values(), updates, givens=givens, tensorboard_stuff=tensorboard_stuff, check=check)
         return lambda *args, **kwargs: type(outputs)(zip(outputs.keys(), f(*args, **kwargs)))
     else:
-        f = _Function(inputs, [outputs], updates, givens=givens)
+        f = _Function(inputs, [outputs], updates, givens=givens, tensorboard_stuff=tensorboard_stuff, check=check)
         return lambda *args, **kwargs: f(*args, **kwargs)[0]
 
 class _Function(object):
-    def __init__(self, inputs, outputs, updates, givens, check_nan=False):
+    def __init__(self, inputs, outputs, updates, givens, check, check_nan=True, tensorboard_stuff=None):
         for inpt in inputs:
             if not issubclass(type(inpt), TfInput):
                 assert len(inpt.op.inputs) == 0, "inputs should all be placeholders of baselines.common.TfInput"
@@ -370,6 +370,24 @@ class _Function(object):
         self.outputs_update = list(outputs) + [self.update_group]
         self.givens = {} if givens is None else givens
         self.check_nan = check_nan
+
+        self.i = 0
+        self.check = check
+        if tensorboard_stuff is not None:
+            self.writer = tensorboard_stuff["writer"]
+            self.merged = tensorboard_stuff["merged"]
+            self.how_often = tensorboard_stuff["how_often"]
+            # self.check = tensorboard_stuff["check"]
+            # self.saver = tensorboard_stuff["saver"]
+        # try:
+        #     load_state("/tmp/models/model.ckpt")
+        # except:
+        #     print("model failed to load")
+        # try:
+        #     self.saver.restore(get_session(), "/tmp/models/model.ckpt")
+        #     print("model loaded")
+        # except:
+        #     print("model not found. Starting a new one")
 
     def _feed_input(self, feed_dict, inpt, value):
         if issubclass(type(inpt), TfInput):
@@ -399,7 +417,34 @@ class _Function(object):
         # Update feed dict with givens.
         for inpt in self.givens:
             feed_dict[inpt] = feed_dict.get(inpt, self.givens[inpt])
-        results = get_session().run(self.outputs_update, feed_dict=feed_dict)[:-1]
+        # summary, results = get_session().run([self.merged, self.outputs_update], feed_dict=feed_dict)[:-1]
+        # self.file_writer.add_summary(summary)
+
+        if hasattr(self, 'merged'):
+            results, summary, check = get_session().run([self.outputs_update, self.merged, self.check], feed_dict=feed_dict)
+            if self.i % self.how_often == 0:
+                self.writer.add_summary(summary, self.i)
+            self.i += 1
+            results = results[:-1]
+            # if self.i % 50 == 0:
+            #     self.saver.save(get_session(), '/tmp/models/model.ckpt')
+        else:
+            results, check = get_session().run([self.outputs_update, self.check], feed_dict=feed_dict)
+            results = results[:-1]
+
+        # resu = results
+        # i=0
+        # if any(np.isnan(r).any() for r in results):
+        #     print("asdf")
+        # for r in resu:
+        #     where_are_NaNs = np.isnan(r)
+        #     if where_are_NaNs.any():
+        #         if np.size(where_are_NaNs) > 1:
+        #             results[i][where_are_NaNs] = 0.0
+        #         else:
+        #             results[i] = 0.0
+        #     i += 1
+
         if self.check_nan:
             if any(np.isnan(r).any() for r in results):
                 raise RuntimeError("Nan detected")
@@ -552,8 +597,20 @@ def numel(x):
 def intprod(x):
     return int(np.prod(x))
 
-def flatgrad(loss, var_list, clip_norm=None):
+def flatgrad(loss, var_list, clip_norm=None, nan_override=None, writer=None):
     grads = tf.gradients(loss, var_list)
+    if nan_override is not None:
+        grads_unchecked = grads
+        i=0
+        for grad in grads_unchecked:
+            grads[i] = tf.where(tf.is_nan(grad), tf.zeros(tf.shape(grad)), grad) #ben
+            i += 1
+            # if writer is not None and tf.is_nan(grad):
+            #     # value="nan avoided in flatgrad! nan value set to 0."
+            #     # text_tensor = tf.make_tensor_proto(value, dtype=tf.string)
+            #     summary = tf.summary.text("nan_avoidance_indicator", tf.convert_to_tensor("nan avoided in flatgrad! nan value set to 0."))
+            #     text = tf.get_default_session().run(summary)
+            #     writer.add_summary(text)
     if clip_norm is not None:
         grads = [tf.clip_by_norm(grad, clip_norm=clip_norm) for grad in grads]
     return tf.concat(axis=0, values=[

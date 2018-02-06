@@ -9,13 +9,14 @@ from mpi4py import MPI
 from collections import deque
 import math
 
-MODEL_NAME = 'model9'
-
+MODEL_NAME = 'model4'
+REWARD_SCALE = 10
 
 class pposgd():
 
     def __init__(self, rank, this_test):
         self.max_rew = -math.inf
+        self.min_loss = math.inf
         self.rank = rank
         self.this_test = this_test
         sess = tf.get_default_session()
@@ -48,14 +49,31 @@ class pposgd():
             ac, vpred = pi.act(stochastic, ob)
             summary = tf.Summary(value=[tf.Summary.Value(tag="vpred", simple_value=vpred)])
             self.writer.add_summary(summary, t)
-            ac_bool = (np.tanh(ac[4]) + 1) / 2
-            top_or_front = (np.tanh(ac[5]) + 1) / 2
-            # heading_targeted=(np.tanh(ac[2]) + 1) / 2 * math.pi*2
-            summary = tf.Summary(value=[tf.Summary.Value(tag="top_or_front", simple_value=np.round(top_or_front))])
+            summary = tf.Summary(value=[tf.Summary.Value(tag="top_or_front", simple_value=ac[2])])
             self.writer.add_summary(summary, t)
-            summary = tf.Summary(value=[tf.Summary.Value(tag="ac_bool", simple_value=np.round(ac_bool))])
+            summary = tf.Summary(value=[tf.Summary.Value(tag="ac_bool", simple_value=ac[1])])
             self.writer.add_summary(summary, t)
+            summary = tf.Summary(value=[tf.Summary.Value(tag="rmba_sel", simple_value=ac[0])])
+            self.writer.add_summary(summary, t)
+            # go_bool = (np.tanh(ac[3]) + 1) / 2
+            # ac_bool = (np.tanh(ac[4]) + 1) / 2
+            # top_or_front = (np.tanh(ac[5]) + 1) / 2
+            # # heading_targeted=(np.tanh(ac[2]) + 1) / 2 * math.pi*2
+            # summary = tf.Summary(value=[tf.Summary.Value(tag="top_or_front", simple_value=np.round(top_or_front))])
+            # self.writer.add_summary(summary, t)
+            # summary = tf.Summary(value=[tf.Summary.Value(tag="ac_bool", simple_value=np.round(ac_bool))])
+            # self.writer.add_summary(summary, t)
+            # summary = tf.Summary(value=[tf.Summary.Value(tag="pos_x_tar", simple_value=(np.tanh(ac[0]) + 1) / 2 * (20.0) -0.0)])
+            # self.writer.add_summary(summary, t)
+            # summary = tf.Summary(value=[tf.Summary.Value(tag="pos_y_tar", simple_value=(np.tanh(ac[1]) + 1) / 2 * (20.0) -0.0)])
+            # self.writer.add_summary(summary, t)
+            # summary = tf.Summary(value=[tf.Summary.Value(tag="vel_x_tar", simple_value=(np.tanh(ac[2]) + 1) / 2 * (0.33*2) -0.33)])
+            # self.writer.add_summary(summary, t)
+            # summary = tf.Summary(value=[tf.Summary.Value(tag="vel_y_tar", simple_value=(np.tanh(ac[3]) + 1) / 2 * (0.33*2) -0.33)])
+            # self.writer.add_summary(summary, t)
             # summary = tf.Summary(value=[tf.Summary.Value(tag="heading_targeted", simple_value=np.round(heading_targeted))])
+            # self.writer.add_summary(summary, t)
+            # summary = tf.Summary(value=[tf.Summary.Value(tag="go_bool", simple_value=np.round(go_bool))])
             # self.writer.add_summary(summary, t)
             # Slight weirdness here because we need value function at time T
             # before returning segment [0, T-1] so we get the correct
@@ -75,7 +93,14 @@ class pposgd():
             acs[i] = ac
             prevacs[i] = prevac
 
-            ob, rew, new, _ = env.step(ac)
+            ob, rew, new, dist_dict = env.step(ac)
+
+            rew = rew*REWARD_SCALE #ben
+            summary = tf.Summary(value=[tf.Summary.Value(tag="min_dist_all", simple_value=dist_dict["min_dist_all"])])
+            self.writer.add_summary(summary, t)
+            summary = tf.Summary(value=[tf.Summary.Value(tag="min_dist_ac", simple_value=dist_dict["min_dist_ac"])])
+            self.writer.add_summary(summary, t)
+
             if self.rank == 0:
                 env.render()
             rews[i] = rew
@@ -88,7 +113,7 @@ class pposgd():
                 self.writer.add_summary(summary, ep_num)
                 self.writer.flush()
                 if cur_ep_ret > self.max_rew:
-                    U.save_state('/tmp/models/' + MODEL_NAME + '.ckpt')
+                    U.save_state('/tmp/models/' + MODEL_NAME + '_best.ckpt')
                     self.max_rew = cur_ep_ret
 
                 ep_rets.append(cur_ep_ret)
@@ -131,8 +156,8 @@ class pposgd():
         print("Object space:", ob_space, "Action_space", ac_space)
         pi = policy_func("pi", ob_space, ac_space) # Construct network for new policy
         oldpi = policy_func("oldpi", ob_space, ac_space) # Network for old policy
-        atarg = tf.placeholder(dtype=tf.float32, shape=[None]) # Target advantage function (if applicable)
-        ret = tf.placeholder(dtype=tf.float32, shape=[None]) # Empirical return
+        atarg = tf.placeholder(dtype=tf.float32, shape=[None], name="atarg") # Target advantage function (if applicable)
+        ret = tf.placeholder(dtype=tf.float32, shape=[None], name="ret") # Empirical return
 
         lrmult = tf.placeholder(name='lrmult', dtype=tf.float32, shape=[]) # learning rate multiplier, updated with schedule
         clip_param = clip_param * lrmult # Annealed cliping parameter epislon
@@ -163,13 +188,14 @@ class pposgd():
             with tf.name_scope("vf_loss"):
                 vf_loss= U.mean(tf.square(pi.vpred - ret))
             with tf.name_scope("total_loss"):
-                total_loss = pol_surr + pol_entpen + vf_loss
-            losses = [pol_surr, pol_entpen, vf_loss, meankl, meanent]
-            loss_names = ["pol_surr", "pol_entpen", "vf_loss", "kl", "ent"]
+                total_loss = 10e3*pol_surr + pol_entpen + vf_loss
+            losses = [pol_surr, pol_entpen, vf_loss, meankl, meanent, total_loss]
+            loss_names = ["pol_surr", "pol_entpen", "vf_loss", "kl", "ent", "total"]
 
-
+        # totes_loss = tf.placeholder(dtype=tf.float32, shape=[], name="totes_loss")
         var_list = pi.get_trainable_variables()
-        print("var_ist", var_list)
+        # my_flatGrad = U.flatgrad(totes_loss, var_list)
+        # justComputeGrad = U.function([ob, ac, atarg, ret, lrmult], [U.flatgrad(total_loss, var_list)])
         lossandgrad = U.function([ob, ac, atarg, ret, lrmult], losses + [U.flatgrad(total_loss, var_list, nan_override=True, writer=self.writer)])
         adam = MpiAdam(var_list, epsilon=adam_epsilon)
 
@@ -255,23 +281,36 @@ class pposgd():
             assign_old_eq_new() # set old parameter values to new parameter values
             logger.log("Optimizing...")
             logger.log(fmt_row(13, loss_names))
+            losses = []
+            #tewwsting to see if nan is in losses
+            # totes_loss = tf.placeholder(dtype=tf.float32, shape=[None])
+            # var_list = pi.get_trainable_variables()
+            # my_flatGrad = U.flatgrad(totes_loss, var_list)
+            # justComputeGrad = U.function([totes_loss], [U.flatgrad(total_loss, var_list)])
+            # lossandgrad = U.function([ob, ac, atarg, ret, lrmult],
+            #                          losses + [U.flatgrad(total_loss, var_list, nan_override=True, writer=self.writer)])
+            # for batch in d.iterate_once(optim_batchsize):
+            #     newlosses = compute_losses(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult)
+
             # Here we do a bunch of optimization epochs over the data
             for _ in range(optim_epochs):
                 losses = [] # list of tuples, each of which gives the loss for a minibatch
                 for batch in d.iterate_once(optim_batchsize):
                     #    lossandgrad = U.function([ob, ac, atarg, ret, lrmult], losses + [U.flatgrad(total_loss, var_list)])
                     *newlosses, g = lossandgrad(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult)
-                    if np.isnan(g.any()):
-                        raise ValueError('nan in gradient.')
                     adam.update(g, optim_stepsize * cur_lrmult)
                     losses.append(newlosses)
                 logger.log(fmt_row(13, np.mean(losses, axis=0)))
-
+            if iters_so_far % 25 == 0:
+                U.save_state('/tmp/models/' + MODEL_NAME + '.ckpt')
             logger.log("Evaluating losses...")
             losses = []
             for batch in d.iterate_once(optim_batchsize):
                 newlosses = compute_losses(batch["ob"], batch["ac"], batch["atarg"], batch["vtarg"], cur_lrmult)
                 losses.append(newlosses)
+                # if losses[-1] < self.min_loss:
+                #     U.save_state('/tmp/models/' + MODEL_NAME + '.ckpt')
+                #     self.min_loss = losses[-1]
             meanlosses,_,_ = mpi_moments(losses, axis=0)
             logger.log(fmt_row(13, meanlosses))
             for (lossval, name) in zipsame(meanlosses, loss_names):
@@ -296,6 +335,7 @@ class pposgd():
 
             summary = tf.Summary(value=[tf.Summary.Value(tag="cur_lrmult ", simple_value=cur_lrmult )])
             self.writer.add_summary(summary, iters_so_far)
+
 
             if MPI.COMM_WORLD.Get_rank()==0:
                 logger.dump_tabular()

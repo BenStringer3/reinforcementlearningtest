@@ -13,6 +13,9 @@ def worker(remote, parent_remote, env_fn_wrapper):
             if done:
                 ob = env.reset()
             remote.send((ob, reward, done, info))
+        elif cmd == 'render':
+            ob = env.render()
+            remote.send(ob)
         elif cmd == 'reset':
             ob = env.reset()
             remote.send(ob)
@@ -68,7 +71,10 @@ class SubprocVecEnv(VecEnv):
         results = [remote.recv() for remote in self.remotes]
         obs, rews, dones, infos = zip(*results)
         return np.stack(obs), np.stack(rews), np.stack(dones), infos
-
+    def render(self, mode='human', close = False):
+        for remote in self.remotes:
+            remote.send(('render', None))
+        return np.stack([remote.recv() for remote in self.remotes])
     def reset(self):
         for remote in self.remotes:
             remote.send(('reset', None))

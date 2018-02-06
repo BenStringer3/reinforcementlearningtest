@@ -63,13 +63,13 @@ class CnnPolicy(object):
         elif kind == 'dense': 
             #x = ob / 20.0 + 0.5
             x = tf.nn.l2_normalize(ob, 0)
-            l1 = tf.layers.dense(inputs=x, units=512, activation=tf.nn.tanh,name="l1")
-            l2 = tf.layers.dense(inputs=l1, units=256, activation=tf.nn.tanh,name="l2")
-            l3 = tf.layers.dense(l2,128, tf.nn.tanh,name="l3")
-            l4= tf.layers.dense(l3, 64, tf.nn.tanh, name="l4")
-            logits = U.dense(l4, pdtype.param_shape()[0], "logits", U.normc_initializer(0.01))
+            l1 = tf.layers.dense(inputs=x, units=512*3, activation=tf.nn.tanh,name="l1")
+            l2 = tf.layers.dense(inputs=l1, units=512*2, activation=tf.nn.tanh,name="l2")
+            l3 = tf.layers.dense(l2,64*2, tf.nn.tanh,name="l3")
+            # l4= tf.layers.dense(l3, 64*4, tf.nn.tanh, name="l4")
+            logits = U.dense(l3, pdtype.param_shape()[0], "logits", U.normc_initializer(0.01))
             self.pd = pdtype.pdfromflat(logits)
-            self.vpred = U.dense(l4, 1, "value", U.normc_initializer(1.0))[:, 0]
+            self.vpred = U.dense(l3, 1, "value", U.normc_initializer(1.0))[:, 0]
         else:
             raise NotImplementedError
 

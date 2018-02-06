@@ -29,6 +29,8 @@ class VecFrameStack(VecEnv):
                 self.stackedobs[i] = 0
         self.stackedobs[..., -obs.shape[-1]:] = obs
         return self.stackedobs, rews, news, infos
+    def render(self, mode='human', close=False):
+        self.venv.render()
     def reset(self):
         """
         Reset all environments
